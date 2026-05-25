@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tagstock-mysql
+    ports:
+      - "3308:3306" # 아까 설정하신 포트
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: tagstock_db
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      # 이전에 쓰던 mysql-data 대신 새 이름 부여!
+      - tagstock-mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:alpine
+    container_name: tagstock-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  # 맨 아래 볼륨 선언부도 새 이름으로 변경!
+  tagstock-mysql-data:
