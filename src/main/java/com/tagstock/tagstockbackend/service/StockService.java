@@ -34,8 +34,8 @@ public class StockService {
                     .collect(Collectors.toList());
 
             // 3. 종목 코드로 실제 주가 테이블(DailyStockPrice)에서 오늘 날짜의 주식 정보를 찾습니다.
-            DailyStockPrice stockInfo = priceRepository.findByStockCodeAndBaseDate(
-                    analysis.getStockCode(), LocalDate.now()
+            DailyStockPrice stockInfo = priceRepository.findTopByStockCodeOrderByBaseDateDesc(
+                    analysis.getStockCode()
             ).orElse(null);
 
             // 4. 조회된 데이터가 있으면 실제 값을, 없으면 기본값을 넣습니다.
