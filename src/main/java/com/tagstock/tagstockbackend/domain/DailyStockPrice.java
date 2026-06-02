@@ -3,6 +3,7 @@ package com.tagstock.tagstockbackend.domain;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Entity
 @Getter
@@ -11,8 +12,11 @@ import java.time.LocalDate;
 @Builder
 @Table(
         name = "daily_stock_price",
+        uniqueConstraints = {
+                // 🌟 같은 종목코드와 날짜의 중복 데이터 저장을 원천 차단
+                @UniqueConstraint(name = "uk_stock_date", columnNames = {"stock_code", "base_date"})
+        },
         indexes = {
-                // 종목코드와 날짜로 조회하는 경우가 많으므로 복합 인덱스 생성
                 @Index(name = "idx_stock_date", columnList = "stock_code, base_date")
         }
 )
@@ -32,8 +36,17 @@ public class DailyStockPrice {
     private LocalDate baseDate;
 
     @Column(name = "close_price")
-    private Integer closePrice;
+    private Long closePrice; // 🌟 Integer보다 큰 범위의 금융값 대응
 
     @Column(name = "volume")
     private Long volume;
+
+    // 🌟 데이터 수집 시점 기록
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        this.createdAt = LocalDateTime.now();
+    }
 }

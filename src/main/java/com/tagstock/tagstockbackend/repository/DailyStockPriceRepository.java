@@ -28,15 +28,27 @@ public interface DailyStockPriceRepository extends JpaRepository<DailyStockPrice
     );
 
     // 두 테이블을 Join하여 프론트엔드에서 필요한 데이터만 DTO로 바로 쏙 뽑아옵니다.
-    @Query("SELECT new com.tagstock.tagstockbackend.dto.StockAiResponseDto(d.stockCode, d.stockName, d.closePrice, a.aiPattern, a.aiTags) " +
+    @Query("SELECT new com.tagstock.tagstockbackend.dto.StockAiResponseDto(" +
+            "d.stockCode, d.stockName, CAST(d.closePrice AS long), a.aiPattern, a.aiTags) " + // 🌟 CAST 추가
             "FROM DailyStockPrice d JOIN StockAiAnalysis a ON d.stockCode = a.stockCode " +
             "ORDER BY d.closePrice DESC")
     List<StockAiResponseDto> findStocksWithAiData();
 
-    // 🌟 프론트에서 넘어온 태그(예: "#골든크로스임박")가 포함된 종목만 필터링해서 가져옵니다.
-    @Query("SELECT new com.tagstock.tagstockbackend.dto.StockAiResponseDto(d.stockCode, d.stockName, d.closePrice, a.aiPattern, a.aiTags) " +
+    // 🌟 프론트에서 넘어온 태그가 포함된 종목만 필터링
+    @Query("SELECT new com.tagstock.tagstockbackend.dto.StockAiResponseDto(" +
+            "d.stockCode, d.stockName, CAST(d.closePrice AS long), a.aiPattern, a.aiTags) " + // 🌟 CAST 추가
             "FROM DailyStockPrice d JOIN StockAiAnalysis a ON d.stockCode = a.stockCode " +
             "WHERE a.aiTags LIKE %:tag% " +
             "ORDER BY d.closePrice DESC")
     List<StockAiResponseDto> findStocksByAiTag(@Param("tag") String tag);
+
+    // DailyStockPriceRepository.java 내부에 추가
+    @Query("SELECT new com.tagstock.tagstockbackend.dto.StockAiResponseDto(" +
+            "d.stockCode, d.stockName, CAST(d.closePrice AS long), a.aiPattern, a.aiTags) " + // 🌟 CAST 추가
+            "FROM DailyStockPrice d JOIN StockAiAnalysis a ON d.stockCode = a.stockCode " +
+            "WHERE d.stockCode = :stockCode")
+    Optional<StockAiResponseDto> findStockDetailByCode(@Param("stockCode") String stockCode);
+
+    // 🌟 특정 종목의 데이터를 날짜 내림차순(최신순)으로 정렬하여 딱 7개만 가져옵니다.
+    List<DailyStockPrice> findTop7ByStockCodeOrderByBaseDateDesc(String stockCode);
 }

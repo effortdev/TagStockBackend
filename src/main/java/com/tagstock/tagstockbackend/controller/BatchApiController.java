@@ -1,12 +1,15 @@
 package com.tagstock.tagstockbackend.controller;
 
+import com.tagstock.tagstockbackend.service.KisApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,6 +22,17 @@ public class BatchApiController {
 
     private final JobLauncher jobLauncher;
     private final Job aiAnalysisJob;
+
+    @Autowired
+    private KisApiService kisApiService;
+
+    @GetMapping("/api/test/kis")
+    public String testKisApi() {
+        // 삼성전자(005930) 실제 데이터 조회 테스트
+        kisApiService.getCurrentPrice("005930");
+        kisApiService.getDailyChartPrice("005930");
+        return "콘솔 로그를 확인해보세요!";
+    }
 
     @PostMapping("/start")
     public ResponseEntity<String> startBatch() {

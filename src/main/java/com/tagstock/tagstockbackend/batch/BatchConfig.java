@@ -4,6 +4,7 @@ import com.tagstock.tagstockbackend.domain.DailyStockPrice;
 import com.tagstock.tagstockbackend.domain.StockAiAnalysis;
 import com.tagstock.tagstockbackend.repository.DailyStockPriceRepository;
 import com.tagstock.tagstockbackend.repository.StockAiAnalysisRepository;
+import com.tagstock.tagstockbackend.service.KisApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
@@ -15,6 +16,7 @@ import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.data.RepositoryItemReader;
 import org.springframework.batch.item.data.builder.RepositoryItemReaderBuilder;
+import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.domain.Sort;
@@ -36,6 +38,7 @@ public class BatchConfig {
     private final PlatformTransactionManager transactionManager;
     private final DailyStockPriceRepository priceRepository;
     private final StockAiAnalysisRepository aiAnalysisRepository;
+    private final KisApiService kisApiService;
 
     private static final int CHUNK_SIZE = 100;
 
@@ -67,27 +70,37 @@ public class BatchConfig {
                 .build();
     }
 
-    // 🌟 2. Processor: Ollama API 연동 로직으로 전면 교체
     @Bean
     public ItemProcessor<DailyStockPrice, StockAiAnalysis> aiPatternProcessor() {
         return item -> {
             log.info(">>>> [Batch Processor] {} ({}) AI 분석 요청 중...", item.getStockName(), item.getStockCode());
 
-            // 1. AI에게 던질 프롬프트(질문) 작성
+            // 🌟 1. JSON 포맷을 강제하는 초정밀 프롬프트 작성
             String prompt = String.format(
-                    "너는 전문 주식 애널리스트야. %s(종목코드: %s)의 오늘 종가가 %d원이고, 거래량은 %d주야. 이 정보를 바탕으로 현재 주식의 패턴과 향후 전망을 딱 한 줄(50자 이내)로 분석해 줘. 그리고 이 상황에 어울리는 주식 트렌드 해시태그 2개를 만들어 줘. (예시: #반등시도 #거래량급증)",
+                    "너는 전문 주식 애널리스트야. %s(종목코드: %s)의 오늘 종가는 %d원이고, 거래량은 %d주야. " +
+                            "이 정보를 바탕으로 분석 결과를 반드시 아래의 JSON 형식으로만 출력해. 마크다운이나 다른 설명은 절대 덧붙이지 마.\n" +
+                            "{\"summary\": \"50자 이내 핵심 한 줄 평\", \"details\": \"주가와 거래량을 바탕으로 한 상세 분석\", \"risk\": \"투자 시 주의할 리스크나 하락 요인\"}",
                     item.getStockName(), item.getStockCode(), item.getClosePrice(), item.getVolume()
             );
 
-            // 2. Ollama API 호출
             String aiResponse = callLocalOllamaApi(prompt);
 
-            // 임시로 전체 응답을 패턴에 저장하고, 태그는 고정값으로 둡니다.
-            // (나중에 AI의 응답 문자열에서 정규식으로 태그만 예쁘게 파싱하는 로직을 추가하면 완벽해집니다)
+            // 🌟 2. AI가 간혹 마크다운(```json)을 붙여서 대답할 경우를 대비한 문자열 정제(클렌징)
+            String cleanedResponse = aiResponse.replace("```json", "").replace("```", "").trim();
+
+            String dynamicTags;
+            if (item.getClosePrice() >= 150000) {
+                dynamicTags = "[\"#실적턴어라운드\", \"#박스권돌파\"]";
+            } else if (item.getVolume() != null && item.getVolume() >= 1000000) {
+                dynamicTags = "[\"#외인매집중\", \"#과매도구간\"]";
+            } else {
+                dynamicTags = "[\"#골든크로스임박\"]";
+            }
+
             return StockAiAnalysis.builder()
                     .stockCode(item.getStockCode())
-                    .aiPattern(aiResponse)
-                    .aiTags("[\"#AI분석완료\"]")
+                    .aiPattern(cleanedResponse) // 이제 단순 문장이 아닌 {"summary":"...", "details":"...", ...} 형태가 저장됩니다!
+                    .aiTags(dynamicTags)
                     .updatedAt(LocalDateTime.now())
                     .build();
         };
@@ -123,5 +136,17 @@ public class BatchConfig {
             return "AI 분석 서버에 연결할 수 없습니다.";
         }
         return "AI 분석 결과를 가져오지 못했습니다.";
+    }
+
+    // BatchConfig.java에 추가할 수집 단계 (Reader/Processor/Writer 구조)
+    @Bean
+    public Step apiDataCollectionStep() {
+        return new StepBuilder("apiDataCollectionStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    // 여기서 kisApiService를 호출하여 삼성전자 데이터를 긁어와 저장
+                    kisApiService.updateStockPrice("005930");
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .build();
     }
 }
