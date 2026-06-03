@@ -38,7 +38,7 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(auth -> auth
                         // 🌟 수정된 부분: 회원가입, 로그인 외에 OAuth2 인증 경로("/oauth2/**")도 누구나 접근 가능하게 허용
-                        .requestMatchers("/api/v1/members/signup", "/api/v1/members/login", "/oauth2/**").permitAll()
+                        .requestMatchers("/api/v1/members/signup", "/api/v1/members/login", "/oauth2/**", "/api/v1/batch/test/**").permitAll()
                         // 나머지 모든 요청은 반드시 인증된 사용자만 접근 가능
                         .anyRequest().authenticated()
                 )

@@ -23,6 +23,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.client.RestTemplate;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -72,35 +74,48 @@ public class BatchConfig {
 
     @Bean
     public ItemProcessor<DailyStockPrice, StockAiAnalysis> aiPatternProcessor() {
+        // 🌟 JSON 파싱을 위한 도구
+        ObjectMapper objectMapper = new ObjectMapper();
+
         return item -> {
             log.info(">>>> [Batch Processor] {} ({}) AI 분석 요청 중...", item.getStockName(), item.getStockCode());
 
-            // 🌟 1. JSON 포맷을 강제하는 초정밀 프롬프트 작성
+            // 🌟 1. 초정밀 프롬프트: 프론트엔드의 태그 리스트를 쥐여주고 이 안에서만 고르도록 강제합니다.
             String prompt = String.format(
                     "너는 전문 주식 애널리스트야. %s(종목코드: %s)의 오늘 종가는 %d원이고, 거래량은 %d주야. " +
                             "이 정보를 바탕으로 분석 결과를 반드시 아래의 JSON 형식으로만 출력해. 마크다운이나 다른 설명은 절대 덧붙이지 마.\n" +
-                            "{\"summary\": \"50자 이내 핵심 한 줄 평\", \"details\": \"주가와 거래량을 바탕으로 한 상세 분석\", \"risk\": \"투자 시 주의할 리스크나 하락 요인\"}",
+                            "단, 태그(tags)는 반드시 다음 중 가장 적절한 2개를 골라서 배열로 작성해: ['#골든크로스임박', '#외인매집중', '#과매도구간', '#박스권돌파', '#실적턴어라운드']\n" +
+                            "{\"summary\": \"50자 이내 핵심 한 줄 평\", \"details\": \"주가와 거래량을 바탕으로 한 상세 분석\", \"tags\": [\"#태그1\", \"#태그2\"]}",
                     item.getStockName(), item.getStockCode(), item.getClosePrice(), item.getVolume()
             );
 
             String aiResponse = callLocalOllamaApi(prompt);
-
-            // 🌟 2. AI가 간혹 마크다운(```json)을 붙여서 대답할 경우를 대비한 문자열 정제(클렌징)
             String cleanedResponse = aiResponse.replace("```json", "").replace("```", "").trim();
 
-            String dynamicTags;
-            if (item.getClosePrice() >= 150000) {
-                dynamicTags = "[\"#실적턴어라운드\", \"#박스권돌파\"]";
-            } else if (item.getVolume() != null && item.getVolume() >= 1000000) {
-                dynamicTags = "[\"#외인매집중\", \"#과매도구간\"]";
-            } else {
-                dynamicTags = "[\"#골든크로스임박\"]";
+            String dynamicTags = "[\"#AI분석완료\"]"; // 파싱 실패 시 기본값
+            String finalAiPattern = cleanedResponse; // 파싱 실패 시 원본 저장
+
+            // 🌟 2. AI가 만들어준 JSON을 파싱하여 태그와 분석 코멘트를 완벽하게 분리
+            try {
+                JsonNode rootNode = objectMapper.readTree(cleanedResponse);
+
+                // 프론트엔드용 태그 배열 추출 (예: "['#박스권돌파', '#실적턴어라운드']")
+                if (rootNode.has("tags") && rootNode.get("tags").isArray()) {
+                    dynamicTags = rootNode.get("tags").toString();
+                }
+
+                // 프론트 화면에 깔끔하게 보여줄 문장 조립 (Summary + Details)
+                if (rootNode.has("summary") && rootNode.has("details")) {
+                    finalAiPattern = "💡 " + rootNode.get("summary").asText() + "\n\n" + rootNode.get("details").asText();
+                }
+            } catch (Exception e) {
+                log.error("JSON 파싱 에러 (AI가 형식을 어겼습니다): {}", cleanedResponse);
             }
 
             return StockAiAnalysis.builder()
                     .stockCode(item.getStockCode())
-                    .aiPattern(cleanedResponse) // 이제 단순 문장이 아닌 {"summary":"...", "details":"...", ...} 형태가 저장됩니다!
-                    .aiTags(dynamicTags)
+                    .aiPattern(finalAiPattern) // 이제 JSON 껍데기가 아닌 깔끔한 텍스트만 들어갑니다!
+                    .aiTags(dynamicTags)       // 🌟 AI가 스스로 선택한 진짜 해시태그!
                     .updatedAt(LocalDateTime.now())
                     .build();
         };

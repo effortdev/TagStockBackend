@@ -9,6 +9,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,19 +132,32 @@ public class KisApiService {
     private DailyStockPriceRepository priceRepository;
 
     public void updateStockPrice(String stockCode) {
+        // API에서 주식 데이터를 가져오는 기존 로직
         Map<String, Object> data = getCurrentPrice(stockCode);
+
         if (data != null) {
-            // 🌟 Builder 패턴을 사용하여 객체 생성과 동시에 값을 주입
+            // 🌟 [핵심] 종목 코드에 맞춰서 진짜 이름을 찾아주는 변환기(Switch) 추가
+            String realStockName = switch(stockCode) {
+                case "000660" -> "SK하이닉스";
+                case "035420" -> "NAVER";
+                case "005380" -> "현대차";
+                case "035720" -> "카카오";
+                case "000270" -> "기아";
+                case "005930" -> "삼성전자";
+                default -> "알수없음";
+            };
+
+            // Builder 패턴으로 엔티티 생성 시 realStockName을 넣어줍니다.
             DailyStockPrice stock = DailyStockPrice.builder()
                     .stockCode(stockCode)
-                    .stockName("삼성전자")
-                    .closePrice(Long.parseLong(data.get("stck_prpr").toString())) // Long 타입으로 맞춤
+                    .stockName(realStockName) // 🌟 "삼성전자" 하드코딩 제거!
+                    .baseDate(LocalDate.now())
+                    .closePrice(Long.parseLong(data.get("stck_prpr").toString()))
                     .volume(Long.parseLong(data.get("acml_vol").toString()))
-                    .baseDate(java.time.LocalDate.now())
                     .build();
 
             priceRepository.save(stock);
-            log.info(">>>> [DB 저장 완료] {} 데이터 적재 완료", stockCode);
+            log.info(">>>> [DB 저장 완료] {} ({}) 데이터 적재 완료", realStockName, stockCode);
         }
     }
 }

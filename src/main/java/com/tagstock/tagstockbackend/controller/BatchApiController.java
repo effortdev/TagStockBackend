@@ -7,7 +7,6 @@ import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobLauncher;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,16 +21,24 @@ public class BatchApiController {
 
     private final JobLauncher jobLauncher;
     private final Job aiAnalysisJob;
+    // 🌟 @Autowired 대신 Lombok의 @RequiredArgsConstructor를 활용해 final로 깔끔하게 주입
+    private final KisApiService kisApiService;
 
-    @Autowired
-    private KisApiService kisApiService;
-
-    @GetMapping("/api/test/kis")
+    // 🌟 주소 충돌 방지: /api/v1/batch/test/kis 로 접속되도록 수정
+    @GetMapping("/test/kis")
     public String testKisApi() {
-        // 삼성전자(005930) 실제 데이터 조회 테스트
-        kisApiService.getCurrentPrice("005930");
-        kisApiService.getDailyChartPrice("005930");
-        return "콘솔 로그를 확인해보세요!";
+        String[] targetStocks = {"005930", "000660", "035420"}; // 삼성, 하이닉스, 네이버
+
+        for (String code : targetStocks) {
+            kisApiService.updateStockPrice(code);
+            try {
+                // 🌟 한국투자증권 API 차단 방어용 0.3초 휴식 (필수!)
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                log.error("대기 중 에러", e);
+            }
+        }
+        return "3개 종목 수집 완료! DB를 확인하세요.";
     }
 
     @PostMapping("/start")
@@ -39,7 +46,6 @@ public class BatchApiController {
         try {
             log.info("관리자 요청: AI 분석 배치(Job) 수동 기동 시작");
 
-            // 배치는 동일한 파라미터로 두 번 실행될 수 없으므로, 현재 시간을 파라미터로 넣어 매번 새로운 실행으로 인식하게 합니다.
             JobParameters jobParameters = new JobParametersBuilder()
                     .addLong("time", System.currentTimeMillis())
                     .toJobParameters();
