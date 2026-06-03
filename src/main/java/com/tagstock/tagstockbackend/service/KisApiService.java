@@ -8,8 +8,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import java.time.format.DateTimeFormatter;
 
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +34,9 @@ public class KisApiService {
 
     // HTTP 통신을 위한 RestTemplate
     private final RestTemplate restTemplate = new RestTemplate();
+
+    @Autowired
+    private DailyStockPriceRepository priceRepository;
 
     /**
      * 1. 한국투자증권 접속 토큰(Access Token) 발급
@@ -99,44 +104,45 @@ public class KisApiService {
     }
 
     /**
-     * 3. 주식 일자별 시세 조회 API (프론트엔드 차트 데이터용)
+     * 3. [핵심] 최근 30일(영업일 기준) 주가 데이터를 가져오는 메서드
+     * (프론트엔드 차트 및 AI 실시간 분석용 통합)
      */
-    public List<Map<String, Object>> getDailyChartPrice(String stockCode) {
+    public List<Map<String, Object>> getRecent30DaysPrice(String stockCode) {
+        log.info(">>>> [한국투자증권] {} 30일 치 과거 데이터 조회 요청...", stockCode);
         if (accessToken == null) issueAccessToken();
 
-        // 주식 일자별 시세 URL (최근 30영업일 치를 반환합니다)
+        // KIS 기간별 시세 API 주소 (파라미터: J=주식, D=일별, 0=수정주가 반영)
         String url = domain + "/uapi/domestic-stock/v1/quotations/inquire-daily-price" +
                 "?FID_COND_MRKT_DIV_CODE=J" +
                 "&FID_INPUT_ISCD=" + stockCode +
-                "&FID_PERIOD_DIV_CODE=D" + // D: 일 단위
-                "&FID_ORG_ADJ_PRC=0";      // 0: 수정주가 미적용
+                "&FID_PERIOD_DIV_CODE=D" +
+                "&FID_ORG_ADJ_PRC=0";
 
-        // FHKST01010400 : 주식현재가 일자별 조회용 TR_ID
+        // FHKST01010400 : 주식 일자별 시세 조회용 TR_ID
         HttpEntity<String> entity = new HttpEntity<>(createHeaders("FHKST01010400"));
 
         try {
             ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, entity, Map.class);
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                // output 필드에 날짜별 데이터가 배열(List) 형태로 들어있습니다.
-                List<Map<String, Object>> outputList = (List<Map<String, Object>>) response.getBody().get("output");
-                log.info(">>>> [한국투자증권] {} 차트용 과거 데이터 {}건 로드 성공!", stockCode, outputList.size());
+            Map<String, Object> body = response.getBody();
+
+            if (response.getStatusCode().is2xxSuccessful() && body != null && body.containsKey("output")) {
+                List<Map<String, Object>> outputList = (List<Map<String, Object>>) body.get("output");
+                log.info(">>>> [한국투자증권] {} 차트/AI용 과거 데이터 {}건 로드 성공!", stockCode, outputList.size());
                 return outputList;
             }
         } catch (Exception e) {
-            log.error("[ERROR] 한국투자증권 일별 시세 조회 실패: ", e);
+            log.error("[ERROR] 한국투자증권 30일 시세 API 호출 중 에러 발생", e);
         }
-        return null;
+        return Collections.emptyList();
     }
 
-    @Autowired
-    private DailyStockPriceRepository priceRepository;
-
+    /**
+     * 4. DB에 주가 정보를 저장하는 메서드
+     */
     public void updateStockPrice(String stockCode) {
-        // API에서 주식 데이터를 가져오는 기존 로직
         Map<String, Object> data = getCurrentPrice(stockCode);
 
         if (data != null) {
-            // 🌟 [핵심] 종목 코드에 맞춰서 진짜 이름을 찾아주는 변환기(Switch) 추가
             String realStockName = switch(stockCode) {
                 case "000660" -> "SK하이닉스";
                 case "035420" -> "NAVER";
@@ -147,10 +153,9 @@ public class KisApiService {
                 default -> "알수없음";
             };
 
-            // Builder 패턴으로 엔티티 생성 시 realStockName을 넣어줍니다.
             DailyStockPrice stock = DailyStockPrice.builder()
                     .stockCode(stockCode)
-                    .stockName(realStockName) // 🌟 "삼성전자" 하드코딩 제거!
+                    .stockName(realStockName)
                     .baseDate(LocalDate.now())
                     .closePrice(Long.parseLong(data.get("stck_prpr").toString()))
                     .volume(Long.parseLong(data.get("acml_vol").toString()))
@@ -159,5 +164,53 @@ public class KisApiService {
             priceRepository.save(stock);
             log.info(">>>> [DB 저장 완료] {} ({}) 데이터 적재 완료", realStockName, stockCode);
         }
+    }
+
+    /**
+     * 5. [핵심] 30일 치 데이터를 가져와서 '중복 없이' DB에 갱신(Sync)하는 메서드
+     */
+    public void sync30DaysDataToDbSafe(String stockCode) {
+        log.info(">>>> [데이터 동기화] {} 종목의 30일 치 데이터 중복 검사 및 DB 적재 시작...", stockCode);
+
+        // 1. KIS API에서 30일 치 데이터를 가져옵니다.
+        List<Map<String, Object>> recentPrices = getRecent30DaysPrice(stockCode);
+
+        // 종목 이름 매핑 (기존과 동일)
+        String realStockName = switch(stockCode) {
+            case "000660" -> "SK하이닉스";
+            case "035420" -> "NAVER";
+            case "005380" -> "현대차";
+            case "035720" -> "카카오";
+            case "000270" -> "기아";
+            case "005930" -> "삼성전자";
+            default -> "알수없음";
+        };
+
+        int insertCount = 0;
+
+        // 2. 30개의 데이터를 하나씩 까보면서 중복 검사를 합니다.
+        for (Map<String, Object> data : recentPrices) {
+            String dateStr = data.get("stck_bsop_date").toString(); // "20260603"
+            LocalDate baseDate = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyyMMdd"));
+
+            // 🌟 [핵심] DB에 이 종목의 해당 날짜 데이터가 있는지 팩트 체크!
+            boolean isExist = priceRepository.existsByStockCodeAndBaseDate(stockCode, baseDate);
+
+            // 3. 데이터가 없을 때만 DB에 새롭게 저장합니다.
+            if (!isExist) {
+                DailyStockPrice stock = DailyStockPrice.builder()
+                        .stockCode(stockCode)
+                        .stockName(realStockName)
+                        .baseDate(baseDate) // KIS API가 준 진짜 과거 날짜!
+                        .closePrice(Long.parseLong(data.get("stck_clpr").toString()))
+                        .volume(Long.parseLong(data.get("acml_vol").toString()))
+                        .build();
+
+                priceRepository.save(stock);
+                insertCount++;
+            }
+        }
+
+        log.info(">>>> [데이터 동기화 완료] {} - 총 30건 중 신규 저장: {}건 (나머지는 이미 존재하여 스킵)", realStockName, insertCount);
     }
 }

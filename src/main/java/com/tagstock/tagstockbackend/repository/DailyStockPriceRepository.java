@@ -51,4 +51,13 @@ public interface DailyStockPriceRepository extends JpaRepository<DailyStockPrice
 
     // 🌟 특정 종목의 데이터를 날짜 내림차순(최신순)으로 정렬하여 딱 7개만 가져옵니다.
     List<DailyStockPrice> findTop7ByStockCodeOrderByBaseDateDesc(String stockCode);
+
+    // 🌟 [추가] 종목 코드와 날짜를 기준으로 이미 데이터가 존재하는지 확인하는 마법의 메서드
+    boolean existsByStockCodeAndBaseDate(String stockCode, LocalDate baseDate);
+
+    // 🌟 [추가] AI 분석을 위해 DB에서 최근 30일 데이터를 가져오는 메서드
+    List<DailyStockPrice> findTop30ByStockCodeOrderByBaseDateDesc(String stockCode);
+
+    // 🌟 [추가] 종목 코드로 검색하되, 날짜(baseDate) 내림차순 정렬해서 가장 위에 있는 '최신 데이터 딱 1개(First)'만 가져와!
+    Optional<DailyStockPrice> findFirstByStockCodeOrderByBaseDateDesc(String stockCode);
 }

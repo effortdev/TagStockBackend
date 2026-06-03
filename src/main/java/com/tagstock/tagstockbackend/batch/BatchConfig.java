@@ -74,48 +74,52 @@ public class BatchConfig {
 
     @Bean
     public ItemProcessor<DailyStockPrice, StockAiAnalysis> aiPatternProcessor() {
-        // 🌟 JSON 파싱을 위한 도구
         ObjectMapper objectMapper = new ObjectMapper();
 
         return item -> {
             log.info(">>>> [Batch Processor] {} ({}) AI 분석 요청 중...", item.getStockName(), item.getStockCode());
 
-            // 🌟 1. 초정밀 프롬프트: 프론트엔드의 태그 리스트를 쥐여주고 이 안에서만 고르도록 강제합니다.
+            // 🌟 1. 프론트엔드가 요구하는 'summary', 'details', 'risk', 'tags' 4가지를 모두 요구하는 프롬프트
             String prompt = String.format(
                     "너는 전문 주식 애널리스트야. %s(종목코드: %s)의 오늘 종가는 %d원이고, 거래량은 %d주야. " +
                             "이 정보를 바탕으로 분석 결과를 반드시 아래의 JSON 형식으로만 출력해. 마크다운이나 다른 설명은 절대 덧붙이지 마.\n" +
-                            "단, 태그(tags)는 반드시 다음 중 가장 적절한 2개를 골라서 배열로 작성해: ['#골든크로스임박', '#외인매집중', '#과매도구간', '#박스권돌파', '#실적턴어라운드']\n" +
-                            "{\"summary\": \"50자 이내 핵심 한 줄 평\", \"details\": \"주가와 거래량을 바탕으로 한 상세 분석\", \"tags\": [\"#태그1\", \"#태그2\"]}",
+                            "단, 태그(tags)는 반드시 ['#골든크로스임박', '#외인매집중', '#과매도구간', '#박스권돌파', '#실적턴어라운드'] 중 가장 적절한 2개를 골라 배열로 작성해.\n" +
+                            "{\"summary\": \"50자 이내 핵심 한 줄 평\", \"details\": \"주가와 거래량을 바탕으로 한 상세 분석\", \"risk\": \"투자 시 주의할 리스크나 하락 요인\", \"tags\": [\"#태그1\", \"#태그2\"]}",
                     item.getStockName(), item.getStockCode(), item.getClosePrice(), item.getVolume()
             );
 
             String aiResponse = callLocalOllamaApi(prompt);
             String cleanedResponse = aiResponse.replace("```json", "").replace("```", "").trim();
 
-            String dynamicTags = "[\"#AI분석완료\"]"; // 파싱 실패 시 기본값
-            String finalAiPattern = cleanedResponse; // 파싱 실패 시 원본 저장
+            String dynamicTags = "[\"#AI분석완료\"]";
+            String finalAiPattern;
 
-            // 🌟 2. AI가 만들어준 JSON을 파싱하여 태그와 분석 코멘트를 완벽하게 분리
             try {
                 JsonNode rootNode = objectMapper.readTree(cleanedResponse);
 
-                // 프론트엔드용 태그 배열 추출 (예: "['#박스권돌파', '#실적턴어라운드']")
+                // 프론트 화면 필터링을 위한 태그 배열 추출
                 if (rootNode.has("tags") && rootNode.get("tags").isArray()) {
                     dynamicTags = rootNode.get("tags").toString();
                 }
 
-                // 프론트 화면에 깔끔하게 보여줄 문장 조립 (Summary + Details)
-                if (rootNode.has("summary") && rootNode.has("details")) {
-                    finalAiPattern = "💡 " + rootNode.get("summary").asText() + "\n\n" + rootNode.get("details").asText();
-                }
+                // 🌟 2. 상세 페이지(StockDetail.jsx)가 에러 없이 JSON.parse() 할 수 있도록 완벽한 JSON 문자열로 재조립
+                com.fasterxml.jackson.databind.node.ObjectNode safeJson = objectMapper.createObjectNode();
+                safeJson.put("summary", rootNode.path("summary").asText("요약 데이터가 없습니다."));
+                safeJson.put("details", rootNode.path("details").asText("상세 분석 데이터를 불러오는 중 오류가 발생했습니다."));
+                safeJson.put("risk", rootNode.path("risk").asText("리스크 데이터를 확인할 수 없습니다."));
+
+                finalAiPattern = safeJson.toString(); // 이 JSON 껍데기 전체를 DB에 저장!
+
             } catch (Exception e) {
-                log.error("JSON 파싱 에러 (AI가 형식을 어겼습니다): {}", cleanedResponse);
+                log.error("JSON 파싱 에러 (AI 형식이 어긋남): {}", cleanedResponse);
+                // 파싱 실패 시에도 프론트엔드가 뻗지 않도록 예비(Fallback) JSON 제공
+                finalAiPattern = "{\"summary\":\"분석 실패\",\"details\":\"AI 분석 중 오류가 발생했습니다.\",\"risk\":\"데이터 없음\"}";
             }
 
             return StockAiAnalysis.builder()
                     .stockCode(item.getStockCode())
-                    .aiPattern(finalAiPattern) // 이제 JSON 껍데기가 아닌 깔끔한 텍스트만 들어갑니다!
-                    .aiTags(dynamicTags)       // 🌟 AI가 스스로 선택한 진짜 해시태그!
+                    .aiPattern(finalAiPattern) // JSON 문자열 그대로 저장
+                    .aiTags(dynamicTags)       // 태그 배열 저장
                     .updatedAt(LocalDateTime.now())
                     .build();
         };
